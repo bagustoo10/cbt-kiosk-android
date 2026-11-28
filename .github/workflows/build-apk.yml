@@ -1,0 +1,169 @@
+name: Pabrik APK CBT Sekolah v2.5 (1-Klik)
+
+on:
+  workflow_dispatch:
+    inputs:
+      client_type:
+        description: 'Jenis Klien (apk_only = Exam Browser Berlangganan via owner-apk-bagus | web_cbt_full = Web CBT + APK)'
+        type: choice
+        required: true
+        default: 'apk_only'
+        options:
+          - 'apk_only'
+          - 'web_cbt_full'
+      license_server_project:
+        description: 'Project ID Server Lisensi Owner (untuk cek masa aktif & Hidden URL APK Only)'
+        required: true
+        default: 'owner-apk-bagus'
+      firebase_project_id:
+        description: 'Project ID Firebase Sekolah (dipakai jika client_type = web_cbt_full)'
+        required: false
+        default: 'ruang-uji-bagus'
+      school_slug:
+        description: 'Kode Slug Sekolah (HARUS sama dengan Slug di Tab 2 owner-apk-bagus!)'
+        required: true
+        default: 'ruangujibagus'
+      app_name:
+        description: 'Nama Aplikasi Fallback (jika belum diisi di cloud)'
+        required: true
+        default: 'CBT Exam Browser'
+      cbt_url:
+        description: 'Link Web CBT Fallback (otomatis dienkripsi di dalam APK!)'
+        required: true
+        default: 'https://ruang-uji-bagus.web.app'
+      exit_pin:
+        description: 'PIN Pengawas Keluar Kiosk (Vol-Bawah 3x)'
+        required: true
+        default: '1234'
+      entry_pin:
+        description: 'Password Masuk Ujian Fallback (Opsional — otomatis sync live dari Cloud!)'
+        required: false
+        default: ''
+      ua_key:
+        description: 'Kunci User-Agent Guard'
+        required: true
+        default: 'CBT-KIOSK-ANDROID'
+      owner_wa:
+        description: 'No. WA Penyedia untuk tombol perpanjangan (628xxx)'
+        required: true
+        default: '6281234567890'
+      require_pinning:
+        description: 'Wajibkan Sematkan Aplikasi (App Pinning)?'
+        type: choice
+        required: true
+        default: 'true'
+        options:
+          - 'true'
+          - 'false'
+      icon_color:
+        description: 'Warna Ikon Fallback (jika belum upload logo)'
+        type: choice
+        required: true
+        default: '#059669'
+        options:
+          - '#059669'
+          - '#2563eb'
+          - '#7c3aed'
+          - '#dc2626'
+          - '#d97706'
+          - '#0f172a'
+  push:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Sinkronisasi Logo, Nama, Warna & Enkripsi Hidden URL v2.5
+        env:
+          CLIENT_TYPE: ${{ inputs.client_type || 'web_cbt_full' }}
+          LIC_PROJ: ${{ inputs.license_server_project || 'owner-apk-bagus' }}
+          FB_PROJ: ${{ inputs.firebase_project_id || 'ruang-uji-bagus' }}
+          SLUG: ${{ inputs.school_slug || 'ruangujibagus' }}
+          FALLBACK_NAME: ${{ inputs.app_name || 'CBT Exam Browser' }}
+          ICON_COLOR: ${{ inputs.icon_color || '#059669' }}
+          FALLBACK_URL: ${{ inputs.cbt_url || 'https://ruang-uji-bagus.web.app' }}
+          FALLBACK_ENTRY_PIN: ${{ inputs.entry_pin || '' }}
+        run: |
+          python3 -c "import PIL" 2>/dev/null || python3 -m pip install --quiet --break-system-packages pillow || true
+          python3 sync_branding.py "$CLIENT_TYPE" "$LIC_PROJ" "$FB_PROJ" "$SLUG" "$FALLBACK_NAME" "$ICON_COLOR" "$FALLBACK_URL" "$FALLBACK_ENTRY_PIN"
+
+      - name: Siapkan Keystore Permanen (Update Tanpa Uninstall!)
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASS: ${{ secrets.KEYSTORE_PASS }}
+          KEYSTORE_ALIAS: ${{ secrets.KEYSTORE_ALIAS }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo ">>> Menggunakan Keystore Permanen dari GitHub Secrets (update langsung tanpa uninstall)!"
+            echo "$KEYSTORE_BASE64" | tr -d '\n\r ' | base64 -d > keystore.jks
+            keytool -list -keystore keystore.jks -storepass "${KEYSTORE_PASS:-bagustoo2026}" | head -n 8
+          else
+            echo ">>> PERINGATAN: Secret KEYSTORE_BASE64 belum diisi, membuat keystore sementara."
+            keytool -genkeypair -v \
+              -keystore keystore.jks \
+              -alias "${KEYSTORE_ALIAS:-cbtkiosk}" \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "${KEYSTORE_PASS:-bagustoo2026}" -keypass "${KEYSTORE_PASS:-bagustoo2026}" \
+              -dname "CN=BDEV By Bagus too, OU=Education, O=BDEV, L=BandarLampung, ST=Lampung, C=ID"
+          fi
+
+      - name: Setup Gradle 8.7
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Build Signed Release APK v2.6 (Bright Modern UI + QR Scanner + Permanent Keystore)
+        env:
+          CLIENT_TYPE: ${{ inputs.client_type || 'web_cbt_full' }}
+          LIC_PROJ: ${{ inputs.license_server_project || 'owner-apk-bagus' }}
+          FB_PROJ: ${{ inputs.firebase_project_id || 'ruang-uji-bagus' }}
+          IN_SLUG: ${{ inputs.school_slug || 'ruangujibagus' }}
+          IN_PIN: ${{ inputs.exit_pin || '1234' }}
+          IN_UA: ${{ inputs.ua_key || 'CBT-KIOSK-ANDROID' }}
+          IN_WA: ${{ inputs.owner_wa || '6281234567890' }}
+          IN_PINNING: ${{ inputs.require_pinning || 'true' }}
+          KEYSTORE_PASS: ${{ secrets.KEYSTORE_PASS }}
+          KEYSTORE_ALIAS: ${{ secrets.KEYSTORE_ALIAS }}
+          KEY_PASS: ${{ secrets.KEY_PASS }}
+        run: |
+          FINAL_APP_NAME=$(cat synced_app_name.txt)
+          FINAL_URL_ENC=$(cat synced_url_enc.txt)
+          FINAL_ENTRY_PIN=$(cat synced_entry_pin.txt)
+          FINAL_THEME_COLOR=$(cat synced_theme_color.txt)
+          REQ_LIC="true"
+          if [ "$CLIENT_TYPE" = "web_cbt_full" ]; then REQ_LIC="false"; fi
+          AUTO_VC=$((10 + ${{ github.run_number }}))
+          echo "Build APK v2.6.$AUTO_VC | Nama: $FINAL_APP_NAME | RemoteLicense: $REQ_LIC"
+          gradle assembleRelease --stacktrace \
+            -PapkVersionCode="$AUTO_VC" \
+            -PappName="$FINAL_APP_NAME" \
+            -PschoolSlug="$IN_SLUG" \
+            -PcbtUrlEnc="$FINAL_URL_ENC" \
+            -PexitPin="$IN_PIN" \
+            -PentryPin="$FINAL_ENTRY_PIN" \
+            -PthemeColor="$FINAL_THEME_COLOR" \
+            -PuaKey="$IN_UA" \
+            -PownerWa="$IN_WA" \
+            -PrequirePinning="$IN_PINNING" \
+            -PrequireLicenseCheck="$REQ_LIC" \
+            -PlicenseProject="$LIC_PROJ" \
+            -PschoolFirebaseProject="$FB_PROJ"
+          SAFE_NAME=$(echo "$IN_SLUG" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]//g')
+          mkdir -p dist-apk
+          cp app/build/outputs/apk/release/app-release.apk "dist-apk/CBT-Kiosk-${SAFE_NAME:-sekolah}-v2.6.${AUTO_VC}.apk"
+
+      - name: Upload File APK Siap Instal
+        uses: actions/upload-artifact@v4
+        with:
+          name: APK-CBT-${{ inputs.school_slug || 'ruangujibagus' }}-v2.6
+          path: dist-apk/*.apk
